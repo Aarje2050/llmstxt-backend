@@ -1,13 +1,41 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from scraper.crawler import crawl_website
-from scraper.generator import generate_llms_txt, generate_md_files
+from scraper.generator import generate_llms_txt, generate_md_files, remove_md_extensions
 import os
 import json
 import traceback
+import re
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})  # Enable CORS for all routes
+
+def clean_urls_in_content(content):
+    """
+    Final safety check to remove any .md extensions from URLs in content
+    
+    Args:
+        content (str): Content that might contain markdown links with .md extensions
+        
+    Returns:
+        str: Cleaned content with no .md extensions in URLs
+    """
+    # Pattern to match markdown links with .md extensions
+    pattern = r'\[(.*?)\]\((.*?)\.md([^\)]*)\)'
+    
+    def replace_link(match):
+        link_text = match.group(1)
+        url = match.group(2)
+        extra = match.group(3) if match.group(3) else ""
+        
+        # Make sure URL has https:// if needed
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
+        return f'[{link_text}]({url}{extra})'
+    
+    # Replace all instances
+    return re.sub(pattern, replace_link, content)
 
 @app.route('/api/scrape', methods=['POST'])
 def scrape():
@@ -39,6 +67,9 @@ def scrape():
             
             # Generate LLMs.txt content
             llms_txt_content = generate_llms_txt(url)
+            
+            # Apply one final safety check to ensure there are no .md extensions
+            llms_txt_content = clean_urls_in_content(llms_txt_content)
             
             # Generate markdown files for each URL
             md_files = generate_md_files(url, discovered_urls)

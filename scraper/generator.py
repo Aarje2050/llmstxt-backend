@@ -61,31 +61,45 @@ def normalize_title(title):
     
     return title
 
-def url_to_md_path(url):
-    """Convert URL to markdown path with domain included"""
+def normalize_url(url):
+    """Normalize URL to handle various patterns and ensure no .md extensions"""
+    # Skip if empty
+    if not url:
+        return url
+        
+    # Remove .md extension if present
+    if url.endswith('.md'):
+        url = url[:-3]
+    
+    # Make sure URL has a scheme
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+    
+    # Parse the URL
     parsed = urlparse(url)
-    domain = parsed.netloc
-    path = parsed.path
     
-    # Handle root URL
-    if not path or path == '/':
-        return f"{domain}/index.md"
+    # Build normalized URL
+    normalized_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
     
-    # Remove trailing slash
-    if path.endswith('/'):
-        path = path[:-1]
+    # Remove trailing slash for consistency, unless it's the root path
+    if normalized_url.endswith('/') and normalized_url != f"{parsed.scheme}://{parsed.netloc}/":
+        normalized_url = normalized_url[:-1]
     
-    # Clean the path (remove special characters)
-    clean_path = re.sub(r'[^a-zA-Z0-9/\-_]', '', path)
+    # Remove .md extension if it somehow got into the path
+    if normalized_url.endswith('.md'):
+        normalized_url = normalized_url[:-3]
     
-    # Replace slashes with proper directory structure
-    md_path = clean_path.replace('/', '/')
+    # Keep query parameters if they exist
+    if parsed.query:
+        normalized_url += f"?{parsed.query}"
     
-    # Return with domain and .md extension
-    return f"{domain}{md_path}.md"
+    return normalized_url
 
 def extract_site_info(url, html_content):
     """Extract site information for LLMs.txt"""
+    # Normalize the URL
+    url = normalize_url(url)
+    
     soup = get_soup(html_content)
     
     # Extract title
@@ -167,15 +181,160 @@ def extract_site_info(url, html_content):
         'important_links': important_links
     }
 
-def strip_html_attributes(html_string):
-    """Strip HTML attributes that might cause problems in markdown conversion"""
-    # Pattern to match HTML tags with attributes
-    pattern = r'<([a-z][a-z0-9]*)\s+[^>]*?(/?)>'
+def remove_md_extensions(content):
+    """Remove .md extensions from all URLs in markdown content"""
+    # This pattern matches markdown links [text](url.md) and captures the components
+    pattern = r'\[(.*?)\]\((.*?)\.md([^\)]*)\)'
     
-    # Replace with clean tags (no attributes)
-    clean_html = re.sub(pattern, r'<\1\2>', html_string)
+    def replace_link(match):
+        text = match.group(1)
+        url = match.group(2)
+        extra = match.group(3) if match.group(3) else ""
+        
+        # Ensure URL has https:// if it's not already starting with http
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
+        return f'[{text}]({url}{extra})'
     
-    return clean_html
+    # Replace all markdown links with cleaned versions
+    cleaned_content = re.sub(pattern, replace_link, content)
+    return cleaned_content
+
+def generate_llms_txt(url):
+    """
+    Generate content for LLMs.txt file with comprehensive markdown conversion
+    
+    Args:
+        url (str): The URL to extract information from
+        
+    Returns:
+        str: Content for LLMs.txt file
+    """
+    try:
+        # Normalize the URL
+        url = normalize_url(url)
+        
+        # Send request with appropriate headers
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        }
+        response = requests.get(url, headers=headers, timeout=15, verify=False)
+        
+        if response.status_code != 200:
+            domain = urlparse(url).netloc
+            error_output = f"""# {domain}
+> This website could not be accessed (Status code: {response.status_code})
+
+## Main Website
+- [Homepage](https://{domain}): Website homepage
+"""
+            # Apply cleaning to ensure no .md extensions
+            return remove_md_extensions(error_output)
+        
+        # Parse the HTML
+        soup = get_soup(response.text)
+        
+        # Extract site information
+        site_info = extract_site_info(url, response.text)
+        
+        # Build the LLMs.txt file according to the spec
+        llms_txt = f"# {site_info['title']}\n"
+        
+        # Add description as blockquote
+        if site_info['description']:
+            llms_txt += f"> {site_info['description']}\n\n"
+        else:
+            domain = urlparse(url).netloc
+            llms_txt += f"> Website at {domain}\n\n"
+        
+        # Add general information paragraph
+        domain = urlparse(url).netloc
+        llms_txt += f"This file provides information about content available on {domain}. "
+        llms_txt += f"The links below can be used to access detailed content from the website. "
+        llms_txt += f"All content linked is available for training AI/ML models unless otherwise noted.\n\n"
+        
+        # Add file lists with H2 headers
+        if site_info['important_links']:
+            # Group links by domain/path to create meaningful sections
+            sections = {}
+            processed_urls = set()  # For deduplication
+            
+            for link_text, link_url in site_info['important_links']:
+                parsed_url = urlparse(link_url)
+                
+                # Skip external links
+                if parsed_url.netloc != urlparse(url).netloc:
+                    continue
+                
+                # Skip if already processed (deduplication)
+                if link_url in processed_urls:
+                    continue
+                
+                processed_urls.add(link_url)
+                
+                # Determine section based on first path segment
+                if not parsed_url.path or parsed_url.path == '/':
+                    section = 'Main Pages'
+                else:
+                    path_segments = [s for s in parsed_url.path.split('/') if s]
+                    if path_segments:
+                        section = path_segments[0].capitalize()
+                    else:
+                        section = 'Main Pages'
+                
+                if section not in sections:
+                    sections[section] = []
+                
+                # Make sure the URL is normalized and has https:// but no .md
+                clean_url = normalize_url(link_url)
+                
+                # Normalize link text
+                if not link_text or link_text.lower() in ['click here', 'read more', 'learn more']:
+                    # Generate a better title
+                    if parsed_url.path == '/' or not parsed_url.path:
+                        link_text = 'Homepage'
+                    else:
+                        link_text = parsed_url.path.split('/')[-1].replace('-', ' ').replace('_', ' ').capitalize()
+                
+                sections[section].append((link_text, clean_url))
+            
+            # If we don't have good sections, use default ones
+            if not sections:
+                domain = urlparse(url).netloc
+                sections['Main Pages'] = [('Homepage', f"https://{domain}")]
+            
+            # Add each section to the LLMs.txt
+            for section, links in sections.items():
+                llms_txt += f"## {section}\n"
+                for link_text, clean_url in links:
+                    llms_txt += f"- [{link_text}]({clean_url})\n"
+                llms_txt += "\n"
+            
+        else:
+            # If no links found, just include the homepage
+            domain = urlparse(url).netloc
+            llms_txt += "## Main Website\n"
+            llms_txt += f"- [Homepage](https://{domain}): Website homepage\n\n"
+        
+        # One final check to ensure no .md extensions remain
+        llms_txt = remove_md_extensions(llms_txt)
+        
+        return llms_txt
+        
+    except Exception as e:
+        print(f"Error generating LLMs.txt: {str(e)}")
+        traceback.print_exc()
+        # Return a basic file if there's an error
+        domain = urlparse(url).netloc
+        basic_output = f"""# {domain}
+> This website could not be analyzed properly
+
+## Main Website
+- [Homepage](https://{domain}): Website homepage
+"""
+        # Apply cleaning to ensure no .md extensions
+        return remove_md_extensions(basic_output)
 
 def html_to_markdown(element, base_url='', level=0):
     """Convert HTML element to markdown recursively"""
@@ -217,9 +376,12 @@ def html_to_markdown(element, base_url='', level=0):
         text = clean_text(element.get_text())
         
         if text and href and not href.startswith('javascript:'):
-            # Make absolute URL if relative
+            # Make absolute URL if relative, ensure no .md
             if not href.startswith(('http://', 'https://')):
                 href = urljoin(base_url, href)
+            
+            # Normalize URL to remove .md if present
+            href = normalize_url(href)
             
             result += f"[{text}]({href})"
         else:
@@ -327,134 +489,12 @@ def html_to_markdown(element, base_url='', level=0):
     
     return result
 
-def generate_llms_txt(url):
-    """
-    Generate content for LLMs.txt file with comprehensive markdown conversion
-    
-    Args:
-        url (str): The URL to extract information from
-        
-    Returns:
-        str: Content for LLMs.txt file
-    """
-    try:
-        # Send request with appropriate headers
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        }
-        response = requests.get(url, headers=headers, timeout=15, verify=False)
-        
-        if response.status_code != 200:
-            domain = urlparse(url).netloc
-            return f"""# {domain}
-> This website could not be accessed (Status code: {response.status_code})
-
-## Main Website
-- [Homepage]({domain}/index.md): Website homepage
-"""
-        
-        # Parse the HTML
-        soup = get_soup(response.text)
-        
-        # Extract site information
-        site_info = extract_site_info(url, response.text)
-        
-        # Build the LLMs.txt file according to the spec
-        llms_txt = f"# {site_info['title']}\n"
-        
-        # Add description as blockquote
-        if site_info['description']:
-            llms_txt += f"> {site_info['description']}\n\n"
-        else:
-            domain = urlparse(url).netloc
-            llms_txt += f"> Website at {domain}\n\n"
-        
-        # Add general information paragraph
-        domain = urlparse(url).netloc
-        llms_txt += f"This file provides information about content available on {domain}. "
-        llms_txt += f"The links below can be used to access detailed content from the website. "
-        llms_txt += f"All content linked is available for training AI/ML models unless otherwise noted.\n\n"
-        
-        # Add file lists with H2 headers
-        if site_info['important_links']:
-            # Group links by domain/path to create meaningful sections
-            sections = {}
-            processed_urls = set()  # For deduplication
-            
-            for link_text, link_url in site_info['important_links']:
-                parsed_url = urlparse(link_url)
-                
-                # Skip external links
-                if parsed_url.netloc != urlparse(url).netloc:
-                    continue
-                
-                # Skip if already processed (deduplication)
-                if link_url in processed_urls:
-                    continue
-                
-                processed_urls.add(link_url)
-                
-                # Determine section based on first path segment
-                if not parsed_url.path or parsed_url.path == '/':
-                    section = 'Main Pages'
-                else:
-                    path_segments = [s for s in parsed_url.path.split('/') if s]
-                    if path_segments:
-                        section = path_segments[0].capitalize()
-                    else:
-                        section = 'Main Pages'
-                
-                if section not in sections:
-                    sections[section] = []
-                
-                # Convert link URL to md file path with domain
-                md_path = url_to_md_path(link_url)
-                
-                # Normalize link text
-                if not link_text or link_text.lower() in ['click here', 'read more', 'learn more']:
-                    # Generate a better title
-                    if parsed_url.path == '/' or not parsed_url.path:
-                        link_text = 'Homepage'
-                    else:
-                        link_text = parsed_url.path.split('/')[-1].replace('-', ' ').replace('_', ' ').capitalize()
-                
-                sections[section].append((link_text, md_path))
-            
-            # If we don't have good sections, use default ones
-            if not sections:
-                domain = urlparse(url).netloc
-                sections['Main Pages'] = [('Homepage', f"{domain}/index.md")]
-            
-            # Add each section to the LLMs.txt
-            for section, links in sections.items():
-                llms_txt += f"## {section}\n"
-                for link_text, md_path in links:
-                    llms_txt += f"- [{link_text}]({md_path})\n"
-                llms_txt += "\n"
-            
-        else:
-            # If no links found, just include the homepage
-            domain = urlparse(url).netloc
-            llms_txt += "## Main Website\n"
-            llms_txt += f"- [Homepage]({domain}/index.md): Website homepage\n\n"
-        
-        return llms_txt
-        
-    except Exception as e:
-        print(f"Error generating LLMs.txt: {str(e)}")
-        traceback.print_exc()
-        # Return a basic file if there's an error
-        domain = urlparse(url).netloc
-        return f"""# {domain}
-> This website could not be analyzed properly
-
-## Main Website
-- [Homepage]({domain}/index.md): Website homepage
-"""
-
 def convert_full_html_to_markdown(html_content, base_url):
     """Convert full HTML content to clean markdown"""
     try:
+        # Normalize the base URL
+        base_url = normalize_url(base_url)
+        
         # Parse the HTML
         soup = get_soup(html_content)
         
@@ -484,6 +524,9 @@ def convert_full_html_to_markdown(html_content, base_url):
         
         markdown += body_markdown
         
+        # Ensure no .md extensions in the markdown
+        markdown = remove_md_extensions(markdown)
+        
         return markdown
     
     except Exception as e:
@@ -507,6 +550,9 @@ def generate_md_files(base_url, urls):
     for url in urls:
         try:
             print(f"Generating markdown for: {url}")
+            
+            # Normalize the URL
+            url = normalize_url(url)
             
             # Send request with appropriate headers
             headers = {

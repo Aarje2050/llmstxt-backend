@@ -24,6 +24,40 @@ def get_soup(html_content):
     print("WARNING: All parsers failed. Using minimal parser - results may be limited.")
     return BeautifulSoup(html_content, 'html.parser')
 
+def normalize_url(url):
+    """Normalize URL to handle various patterns and ensure no .md extensions"""
+    # Skip if empty
+    if not url:
+        return url
+        
+    # Remove .md extension if present
+    if url.endswith('.md'):
+        url = url[:-3]
+    
+    # Make sure URL has a scheme
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url
+    
+    # Parse the URL
+    parsed = urlparse(url)
+    
+    # Build normalized URL
+    normalized_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    
+    # Remove trailing slash for consistency, unless it's the root path
+    if normalized_url.endswith('/') and normalized_url != f"{parsed.scheme}://{parsed.netloc}/":
+        normalized_url = normalized_url[:-1]
+    
+    # Remove .md extension if it somehow got into the path
+    if normalized_url.endswith('.md'):
+        normalized_url = normalized_url[:-3]
+    
+    # Keep query parameters if they exist
+    if parsed.query:
+        normalized_url += f"?{parsed.query}"
+    
+    return normalized_url
+
 def crawl_website(base_url, max_pages=50):
     """
     Crawl a website and extract all URLs within the same domain.
@@ -36,6 +70,9 @@ def crawl_website(base_url, max_pages=50):
         list: List of discovered URLs
     """
     print(f"Starting to crawl: {base_url}")
+    
+    # Normalize the base URL
+    base_url = normalize_url(base_url)
     
     # Parse the base URL to get the domain
     parsed_base = urlparse(base_url)
@@ -93,6 +130,10 @@ def crawl_website(base_url, max_pages=50):
                             
                         # Join relative URLs
                         full_url = urljoin(current_url, href)
+                        
+                        # Normalize the URL to remove .md extensions
+                        full_url = normalize_url(full_url)
+                        
                         parsed_url = urlparse(full_url)
                         
                         # Filter URLs:
@@ -110,7 +151,11 @@ def crawl_website(base_url, max_pages=50):
                             
                             # Remove common file extensions we don't want
                             if not any(clean_url.endswith(ext) for ext in 
-                                       ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip', '.js', '.css']):
+                                      ['.jpg', '.jpeg', '.png', '.gif', '.pdf', '.zip', '.js', '.css']):
+                                
+                                # Remove .md extension if present
+                                if clean_url.endswith('.md'):
+                                    clean_url = clean_url[:-3]
                                 
                                 # Add to the queue if not visited
                                 if clean_url not in visited_urls and clean_url not in urls_to_visit:
@@ -129,5 +174,8 @@ def crawl_website(base_url, max_pages=50):
     # If no URLs were discovered, at least include the base URL
     if not discovered_urls:
         discovered_urls.add(base_url)
+    
+    # Final cleanup: ensure all URLs are normalized and don't have .md extensions
+    clean_discovered_urls = [normalize_url(url) for url in discovered_urls]
         
-    return list(discovered_urls)
+    return clean_discovered_urls
