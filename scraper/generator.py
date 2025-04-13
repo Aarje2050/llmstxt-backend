@@ -251,8 +251,7 @@ def generate_llms_txt(url):
         # Add general information paragraph
         domain = urlparse(url).netloc
         llms_txt += f"This file provides information about content available on {domain}. "
-        llms_txt += f"The links below can be used to access detailed content from the website. "
-        llms_txt += f"All content linked is available for training AI/ML models unless otherwise noted.\n\n"
+     
         
         # Add file lists with H2 headers
         if site_info['important_links']:
