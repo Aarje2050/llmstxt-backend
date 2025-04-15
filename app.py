@@ -21,15 +21,104 @@ CORS(app,
      resources={r"/api/*": {"origins": ["https://llmstxt-nextjs.vercel.app"]}},
      supports_credentials=True)  # Important for sending cookies cross-origin
 
-# MongoDB connection
-MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
-client = MongoClient(MONGODB_URI)
-db = client.llms_txt_generator
-
-# JWT Secret
-JWT_SECRET = os.environ.get("JWT_SECRET", "your_production_secret_key")
-
-
+# MongoDB connection - replace the current code with this
+try:
+    MONGODB_URI = os.environ.get("MONGODB_URI")
+    print(f"Connecting to MongoDB with URI: {MONGODB_URI[:20]}..." if MONGODB_URI else "MongoDB URI not found")
+    
+    if not MONGODB_URI or "localhost" in MONGODB_URI:
+        raise ValueError("Invalid MongoDB URI. Please set a valid MONGODB_URI environment variable.")
+    
+    client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=30000)
+    # Force a connection to verify it works
+    client.admin.command('ping')
+    print("MongoDB connection successful!")
+    db = client.llms_txt_generator
+    
+    # Check if we can access collections
+    db.users.find_one({})  # Just to test connection with a simple query
+    print("Successfully accessed users collection")
+    
+except Exception as e:
+    print(f"MongoDB connection error: {str(e)}")
+    print("Falling back to in-memory storage")
+    
+    # Create in-memory storage as fallback
+    class MemoryDB:
+        def __init__(self):
+            self.users = MemoryCollection("users")
+            self.usage_logs = MemoryCollection("usage_logs")
+    
+    class MemoryCollection:
+        def __init__(self, name):
+            self.name = name
+            self.data = []
+            self.id_counter = 1
+        
+        def insert_one(self, doc):
+            # Add _id if not present
+            if '_id' not in doc:
+                doc['_id'] = self.id_counter
+                self.id_counter += 1
+            self.data.append(doc)
+            return {'inserted_id': doc['_id']}
+        
+        def find_one(self, query=None):
+            if not query:
+                return self.data[0] if self.data else None
+                
+            for doc in self.data:
+                match = True
+                for k, v in query.items():
+                    if k not in doc or doc[k] != v:
+                        match = False
+                        break
+                if match:
+                    return doc
+            return None
+        
+        def update_one(self, query, update, upsert=False):
+            # Find matching document
+            doc = self.find_one(query)
+            
+            # If no match and upsert is True, insert a new document
+            if not doc and upsert:
+                new_doc = {}
+                for k, v in query.items():
+                    new_doc[k] = v
+                
+                # Process update operators
+                if '$set' in update:
+                    for k, v in update['$set'].items():
+                        new_doc[k] = v
+                
+                self.insert_one(new_doc)
+                return
+            
+            # If document found, update it
+            if doc:
+                # Handle $set operator
+                if '$set' in update:
+                    for k, v in update['$set'].items():
+                        doc[k] = v
+                
+                # Handle $unset operator
+                if '$unset' in update:
+                    for k in update['$unset']:
+                        if k in doc:
+                            del doc[k]
+                
+                # Handle $inc operator
+                if '$inc' in update:
+                    for k, v in update['$inc'].items():
+                        if k in doc:
+                            doc[k] += v
+                        else:
+                            doc[k] = v
+    
+    # Create in-memory database as fallback
+    db = MemoryDB()
+    print("Using in-memory database for testing")
 
 # Function to send OTP email
 def send_otp_email(to_email, otp, name):
@@ -434,6 +523,28 @@ def track_usage():
         print(f"Error tracking usage: {str(e)}")
         return jsonify({"message": "Failed to track usage"}), 500
 
+@app.route('/api/debug', methods=['GET'])
+def debug_info():
+    # Don't expose sensitive information in production
+    if os.environ.get('ENVIRONMENT') == 'production':
+        return jsonify({"message": "Debug endpoint disabled in production"}), 403
+        
+    # Show environment variables (except secrets)
+    env_vars = {}
+    for key in os.environ:
+        if key not in ['JWT_SECRET', 'MONGODB_URI', 'EMAIL_PASSWORD']:
+            env_vars[key] = os.environ[key]
+        else:
+            env_vars[key] = "[REDACTED]"
+    
+    # Basic connectivity tests
+    mongodb_status = "Working" if isinstance(db, MongoClient) else "Using in-memory fallback"
+    
+    return jsonify({
+        "environment": env_vars,
+        "mongodb_status": mongodb_status,
+        "time": str(datetime.datetime.now())
+    })
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy"})
