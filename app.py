@@ -40,7 +40,7 @@ def send_otp_email(to_email, otp, name):
         email_secure = os.environ.get('EMAIL_SECURE', 'false').lower() == 'true'
         email_user = os.environ.get('EMAIL_USER')
         email_password = os.environ.get('EMAIL_PASSWORD')
-        email_from = os.environ.get('EMAIL_FROM', '"LLM TXT GENERATOR" <noreply@immortalseo.com>')
+        email_from = os.environ.get('EMAIL_FROM', '"Immortal" <aarje2050@gmail.com>')
         
         # Create message
         message = MIMEMultipart('alternative')
@@ -388,6 +388,51 @@ def logout():
     response = make_response(jsonify({"message": "Logged out successfully"}))
     response.delete_cookie('auth_token', path='/')
     return response
+
+@app.route('/api/usage/track', methods=['POST'])
+def track_usage():
+    try:
+        # Get the auth token
+        token = request.cookies.get('auth_token')
+        if not token:
+            return jsonify({"message": "Authentication required"}), 401
+        
+        # Verify token
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+            email = payload.get('email')
+            
+            # Get user from database
+            user = db.users.find_one({"email": email})
+            if not user:
+                return jsonify({"message": "User not found"}), 404
+            
+            # Get request data
+            data = request.json
+            urls = data.get('urls', [])
+            
+            # Update usage count
+            db.users.update_one(
+                {"email": email},
+                {"$inc": {"usageCount": 1}}
+            )
+            
+            # Optionally log detailed usage
+            usage_log = {
+                "userId": user['_id'],
+                "urls": urls,
+                "timestamp": datetime.datetime.now()
+            }
+            db.usage_logs.insert_one(usage_log)
+            
+            return jsonify({"message": "Usage tracked successfully"})
+        except jwt.ExpiredSignatureError:
+            return jsonify({"message": "Token expired"}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({"message": "Invalid token"}), 401
+    except Exception as e:
+        print(f"Error tracking usage: {str(e)}")
+        return jsonify({"message": "Failed to track usage"}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
