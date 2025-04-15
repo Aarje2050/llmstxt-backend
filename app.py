@@ -24,6 +24,9 @@ CORS(app,
 # MongoDB connection - replace the current code with this
 try:
     MONGODB_URI = os.environ.get("MONGODB_URI")
+    JWT_SECRET = os.environ.get("JWT_SECRET", "default_secret")
+    
+
     print(f"Connecting to MongoDB with URI: {MONGODB_URI[:20]}..." if MONGODB_URI else "MongoDB URI not found")
     
     if not MONGODB_URI or "localhost" in MONGODB_URI:
