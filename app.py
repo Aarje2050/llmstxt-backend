@@ -1,3 +1,5 @@
+# app.py - Optimized version
+
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 from scraper.crawler import crawl_website
@@ -19,43 +21,26 @@ from email.mime.text import MIMEText
 app = Flask(__name__)
 CORS(app, 
      resources={r"/api/*": {"origins": ["https://llmstxt-nextjs.vercel.app"]}},
-     supports_credentials=True)  # Important for sending cookies cross-origin
+     supports_credentials=True)
 
-# MongoDB connection - replace the current code with this
+# MongoDB connection setup
 try:
     MONGODB_URI = os.environ.get("MONGODB_URI")
     JWT_SECRET = os.environ.get("JWT_SECRET", "default_secret")
     
-
-    print(f"Connecting to MongoDB with URI: {MONGODB_URI[:20]}..." if MONGODB_URI else "MongoDB URI not found")
-    print("MONGODB_URI:", repr(MONGODB_URI))
-    print("ENV VARS:")
-    print(os.environ)
-
-
-    if not MONGODB_URI or "localhost" in MONGODB_URI:
-        raise ValueError("Invalid MongoDB URI. Please set a valid MONGODB_URI environment variable.")
+    if not MONGODB_URI:
+        raise ValueError("MongoDB URI not found in environment variables")
     
     client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=30000)
     # Force a connection to verify it works
     client.admin.command('ping')
-    print("MongoDB connection successful!")
     db = client.llms_txt_generator
     
-    # Check if we can access collections
-    db.users.find_one({})  # Just to test connection with a simple query
-    print("Successfully accessed users collection")
+    # Verify collection access
+    db.users.find_one({})
     
 except Exception as e:
-    print(f"MongoDB connection error: {str(e)}")
-    print("Falling back to in-memory storage")
-    
     # Create in-memory storage as fallback
-    class MemoryDB:
-        def __init__(self):
-            self.users = MemoryCollection("users")
-            self.usage_logs = MemoryCollection("usage_logs")
-    
     class MemoryCollection:
         def __init__(self, name):
             self.name = name
@@ -63,7 +48,6 @@ except Exception as e:
             self.id_counter = 1
         
         def insert_one(self, doc):
-            # Add _id if not present
             if '_id' not in doc:
                 doc['_id'] = self.id_counter
                 self.id_counter += 1
@@ -85,16 +69,13 @@ except Exception as e:
             return None
         
         def update_one(self, query, update, upsert=False):
-            # Find matching document
             doc = self.find_one(query)
             
-            # If no match and upsert is True, insert a new document
             if not doc and upsert:
                 new_doc = {}
                 for k, v in query.items():
                     new_doc[k] = v
                 
-                # Process update operators
                 if '$set' in update:
                     for k, v in update['$set'].items():
                         new_doc[k] = v
@@ -102,20 +83,16 @@ except Exception as e:
                 self.insert_one(new_doc)
                 return
             
-            # If document found, update it
             if doc:
-                # Handle $set operator
                 if '$set' in update:
                     for k, v in update['$set'].items():
                         doc[k] = v
                 
-                # Handle $unset operator
                 if '$unset' in update:
                     for k in update['$unset']:
                         if k in doc:
                             del doc[k]
                 
-                # Handle $inc operator
                 if '$inc' in update:
                     for k, v in update['$inc'].items():
                         if k in doc:
@@ -124,8 +101,12 @@ except Exception as e:
                             doc[k] = v
     
     # Create in-memory database as fallback
+    class MemoryDB:
+        def __init__(self):
+            self.users = MemoryCollection("users")
+            self.usage_logs = MemoryCollection("usage_logs")
+            
     db = MemoryDB()
-    print("Using in-memory database for testing")
 
 # Function to send OTP email
 def send_otp_email(to_email, otp, name):
@@ -174,23 +155,12 @@ def send_otp_email(to_email, otp, name):
         server.sendmail(email_from, to_email, message.as_string())
         server.quit()
         
-        print(f"OTP email sent successfully to {to_email}")
         return True
     except Exception as e:
-        print(f"Failed to send OTP email: {str(e)}")
         return False
 
 def clean_urls_in_content(content):
-    """
-    Final safety check to remove any .md extensions from URLs in content
-    
-    Args:
-        content (str): Content that might contain markdown links with .md extensions
-        
-    Returns:
-        str: Cleaned content with no .md extensions in URLs
-    """
-    # Pattern to match markdown links with .md extensions
+    """Remove any .md extensions from URLs in content"""
     pattern = r'\[(.*?)\]\((.*?)\.md([^\)]*)\)'
     
     def replace_link(match):
@@ -198,20 +168,18 @@ def clean_urls_in_content(content):
         url = match.group(2)
         extra = match.group(3) if match.group(3) else ""
         
-        # Make sure URL has https:// if needed
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
             
         return f'[{link_text}]({url}{extra})'
     
-    # Replace all instances
     return re.sub(pattern, replace_link, content)
 
 @app.route('/api/scrape', methods=['POST'])
 def scrape():
     data = request.json
     urls = data.get('urls', [])
-    bulk_mode = data.get('bulkMode', False)  # Get bulk mode flag from request
+    bulk_mode = data.get('bulkMode', False)
     
     if not urls:
         return jsonify({"error": "No URLs provided"}), 400
@@ -219,21 +187,15 @@ def scrape():
     result = {}
     for url in urls:
         try:
-            print(f"Processing URL: {url}")
-            
             # Clean the URL (ensure it has a scheme)
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
             
             # Only crawl if bulk mode is enabled, otherwise just use the single URL
             if bulk_mode:
-                print("Bulk mode enabled - crawling website for all URLs")
                 discovered_urls = crawl_website(url)
             else:
-                print("Single URL mode - skipping crawl")
-                discovered_urls = [url]  # Just use the single URL provided
-            
-            print(f"Working with {len(discovered_urls)} URLs")
+                discovered_urls = [url]
             
             # Generate LLMs.txt content
             llms_txt_content = generate_llms_txt(url)
@@ -251,8 +213,6 @@ def scrape():
                 'discovered_urls': discovered_urls
             }
         except Exception as e:
-            print(f"Error processing {url}: {str(e)}")
-            print(traceback.format_exc())
             result[url] = {
                 'status': 'error',
                 'error': str(e)
@@ -300,18 +260,15 @@ def register():
         
         db.users.insert_one(user)
         
-        # Add this line here to send the email
+        # Send the email
         send_otp_email(email, otp, name)
         
-        print(f"User registered: {email} with OTP: {otp}")
-        
-        # Return success with OTP (for testing)
+        # Return success with OTP (for testing environments only)
         return jsonify({
             "message": "Registration successful! Please check your email for verification code.",
             "otp": otp  # Remove in production
         })
     except Exception as e:
-        print(f"Registration error: {str(e)}")
         return jsonify({"message": "Registration failed. Please try again."}), 500
 
 @app.route('/api/auth/verify', methods=['POST'])
@@ -381,7 +338,6 @@ def verify():
         
         return response
     except Exception as e:
-        print(f"Verification error: {str(e)}")
         return jsonify({"message": "Verification failed. Please try again."}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -439,7 +395,6 @@ def login():
         
         return response
     except Exception as e:
-        print(f"Login error: {str(e)}")
         return jsonify({"message": "Login failed. Please try again."}), 500
 
 @app.route('/api/auth/me', methods=['GET'])
@@ -476,7 +431,6 @@ def get_current_user():
         except jwt.InvalidTokenError:
             return jsonify({"user": None})
     except Exception as e:
-        print(f"Auth check error: {str(e)}")
         return jsonify({"user": None})
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -513,7 +467,7 @@ def track_usage():
                 {"$inc": {"usageCount": 1}}
             )
             
-            # Optionally log detailed usage
+            # Log detailed usage
             usage_log = {
                 "userId": user['_id'],
                 "urls": urls,
@@ -527,38 +481,11 @@ def track_usage():
         except jwt.InvalidTokenError:
             return jsonify({"message": "Invalid token"}), 401
     except Exception as e:
-        print(f"Error tracking usage: {str(e)}")
         return jsonify({"message": "Failed to track usage"}), 500
 
-@app.route('/api/debug', methods=['GET'])
-def debug_info():
-    # Don't expose sensitive information in production
-    if os.environ.get('ENVIRONMENT') == 'production':
-        return jsonify({"message": "Debug endpoint disabled in production"}), 403
-        
-    # Show environment variables (except secrets)
-    env_vars = {}
-    for key in os.environ:
-        if key not in ['JWT_SECRET', 'MONGODB_URI', 'EMAIL_PASSWORD']:
-            env_vars[key] = os.environ[key]
-        else:
-            env_vars[key] = "[REDACTED]"
-    
-    # Basic connectivity tests
-    mongodb_status = "Working" if isinstance(db, MongoClient) else "Using in-memory fallback"
-    
-    return jsonify({
-        "environment": env_vars,
-        "mongodb_status": mongodb_status,
-        "time": str(datetime.datetime.now())
-    })
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy"})
 
-@app.route('/api/test', methods=['GET'])
-def test():
-    return jsonify({"message": "API is working properly!"})
-
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
