@@ -28,7 +28,8 @@ try:
     
 
     print(f"Connecting to MongoDB with URI: {MONGODB_URI[:20]}..." if MONGODB_URI else "MongoDB URI not found")
-    
+    print("MONGODB_URI:", repr(MONGODB_URI))
+
     if not MONGODB_URI or "localhost" in MONGODB_URI:
         raise ValueError("Invalid MongoDB URI. Please set a valid MONGODB_URI environment variable.")
     
