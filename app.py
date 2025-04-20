@@ -3,7 +3,7 @@
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 from scraper.crawler import crawl_website
-# from scraper.generator import generate_llms_txt, generate_md_files, remove_md_extensions
+from scraper.generator import generate_llms_txt
 import os
 import json
 import traceback
