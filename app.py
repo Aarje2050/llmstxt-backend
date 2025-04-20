@@ -3,7 +3,7 @@
 from flask import Flask, request, jsonify, make_response
 from flask_cors import CORS
 from scraper.crawler import crawl_website
-from scraper.generator import generate_llms_txt, generate_md_files, remove_md_extensions
+# from scraper.generator import generate_llms_txt, generate_md_files, remove_md_extensions
 import os
 import json
 import traceback
@@ -179,7 +179,8 @@ def clean_urls_in_content(content):
 def scrape():
     data = request.json
     urls = data.get('urls', [])
-    bulk_mode = data.get('bulkMode', False)
+    bulk_mode = data.get('bulkMode', False)  # Get bulk mode flag from request
+    use_sitemap = data.get('useSitemap', True)  # Get sitemap flag from request, default to True
     
     if not urls:
         return jsonify({"error": "No URLs provided"}), 400
@@ -187,17 +188,23 @@ def scrape():
     result = {}
     for url in urls:
         try:
+            print(f"Processing URL: {url}")
+            
             # Clean the URL (ensure it has a scheme)
             if not url.startswith(('http://', 'https://')):
                 url = 'https://' + url
             
             # Only crawl if bulk mode is enabled, otherwise just use the single URL
             if bulk_mode:
+                print("Bulk mode enabled - crawling website for all URLs")
                 discovered_urls = crawl_website(url)
             else:
-                discovered_urls = [url]
+                print("Single URL mode - skipping crawl")
+                discovered_urls = [url]  # Just use the single URL provided
             
-            # Generate LLMs.txt content
+            print(f"Working with {len(discovered_urls)} URLs")
+            
+            # Generate LLMs.txt content (the updated function now handles sitemap internally)
             llms_txt_content = generate_llms_txt(url)
             
             # Apply one final safety check to ensure there are no .md extensions
@@ -213,6 +220,8 @@ def scrape():
                 'discovered_urls': discovered_urls
             }
         except Exception as e:
+            print(f"Error processing {url}: {str(e)}")
+            print(traceback.format_exc())
             result[url] = {
                 'status': 'error',
                 'error': str(e)

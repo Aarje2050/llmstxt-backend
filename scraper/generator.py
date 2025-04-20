@@ -7,6 +7,7 @@ import datetime
 import urllib3
 import html
 import traceback
+from scraper.crawler import normalize_url, crawl_website_with_sitemap
 
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -61,149 +62,103 @@ def normalize_title(title):
     
     return title
 
-def normalize_url(url):
-    """Normalize URL to handle various patterns and ensure no .md extensions"""
-    # Skip if empty
-    if not url:
-        return url
+def generate_llms_txt_from_sitemap(url, max_pages=50):
+    """
+    Generate LLMs.txt content using sitemap crawling.
+    
+    Args:
+        url (str): The URL to extract information from
+        max_pages (int): Maximum number of pages to process
         
-    # Remove .md extension if present
-    if url.endswith('.md'):
-        url = url[:-3]
-    
-    # Make sure URL has a scheme
-    if not url.startswith(('http://', 'https://')):
-        url = 'https://' + url
-    
-    # Parse the URL
-    parsed = urlparse(url)
-    
-    # Build normalized URL
-    normalized_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-    
-    # Remove trailing slash for consistency, unless it's the root path
-    if normalized_url.endswith('/') and normalized_url != f"{parsed.scheme}://{parsed.netloc}/":
-        normalized_url = normalized_url[:-1]
-    
-    # Remove .md extension if it somehow got into the path
-    if normalized_url.endswith('.md'):
-        normalized_url = normalized_url[:-3]
-    
-    # Keep query parameters if they exist
-    if parsed.query:
-        normalized_url += f"?{parsed.query}"
-    
-    return normalized_url
-
-def extract_site_info(url, html_content):
-    """Extract site information for LLMs.txt"""
-    # Normalize the URL
-    url = normalize_url(url)
-    
-    soup = get_soup(html_content)
-    
-    # Extract title
-    title = urlparse(url).netloc  # Default to domain name
-    if soup.title:
-        title = normalize_title(soup.title.string)
-    else:
-        h1 = soup.find('h1')
-        if h1:
-            title = normalize_title(h1.get_text())
-    
-    # Try to extract description
-    description = ""
-    meta_desc = soup.find('meta', attrs={'name': 'description'})
-    if meta_desc and meta_desc.get('content'):
-        description = clean_text(meta_desc.get('content'))
-    
-    # If no description, try other meta tags
-    if not description:
-        og_desc = soup.find('meta', attrs={'property': 'og:description'})
-        if og_desc and og_desc.get('content'):
-            description = clean_text(og_desc.get('content'))
-    
-    # If still no description, try to get the first paragraph
-    if not description:
-        first_p = soup.find('p')
-        if first_p:
-            description = clean_text(first_p.get_text())
-    
-    # Find important links
-    important_links = []
-    processed_urls = set()  # Track processed URLs to avoid duplicates
-    
-    # Look for navigation menus first
-    nav_elements = soup.select('nav, .nav, .menu, .navigation, .navbar, header')
-    for nav in nav_elements:
-        for link in nav.find_all('a', href=True):
-            href = link['href']
-            text = clean_text(link.get_text())
+    Returns:
+        str: Content for LLMs.txt file in markdown format
+    """
+    try:
+        # Normalize the URL
+        url = normalize_url(url)
+        
+        print(f"Generating LLMs.txt content for {url} using sitemap...")
+        
+        # Crawl website with sitemap and extract metadata
+        site_data = crawl_website_with_sitemap(url, max_pages=max_pages)
+        
+        # Build the LLMs.txt file
+        llms_txt = f"# {site_data['homepage']['title']}\n\n"
+        
+        # Add homepage description as blockquote if available
+        if site_data['homepage']['description']:
+            llms_txt += f"**{site_data['homepage']['description']}**\n\n"
+        else:
+            domain = urlparse(url).netloc
+            llms_txt += f"**Website at {domain}**\n\n"
+        
+        # Add pages from sitemap
+        if site_data['pages']:
+            llms_txt += "## Pages from Sitemap\n\n"
             
-            if text and href and not href.startswith('#') and not href.startswith('javascript:'):
-                # Make absolute URL if relative
-                if not href.startswith(('http://', 'https://')):
-                    href = urljoin(url, href)
-                
-                # Skip if already processed or external
-                parsed_href = urlparse(href)
-                if href in processed_urls or parsed_href.netloc != urlparse(url).netloc:
-                    continue
-                
-                processed_urls.add(href)
-                important_links.append((text, href))
-    
-    # If not enough nav links, get other prominent links
-    if len(important_links) < 5:
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            text = clean_text(a.get_text())
+            # Sort pages by URL for consistent output
+            sorted_pages = sorted(site_data['pages'], key=lambda x: x['url'])
             
-            if text and href and not href.startswith('#') and not href.startswith('javascript:'):
-                # Make absolute URL if relative
-                if not href.startswith(('http://', 'https://')):
-                    href = urljoin(url, href)
+            for page in sorted_pages:
+                # Create a clean title
+                page_title = page['title']
+                page_url = page['url']
+                page_desc = page['description']
                 
-                # Skip if already processed or external
-                parsed_href = urlparse(href)
-                if href in processed_urls or parsed_href.netloc != urlparse(url).netloc:
-                    continue
+                # Add the page entry
+                llms_txt += f"### [{page_title}]({page_url})\n"
                 
-                processed_urls.add(href)
-                important_links.append((text, href))
-                
-                if len(important_links) >= 10:  # Limit to 10 important links
-                    break
-    
-    return {
-        'title': title,
-        'description': description,
-        'important_links': important_links
-    }
+                # Add description if available
+                if page_desc:
+                    llms_txt += f"{page_desc}\n\n"
+                else:
+                    llms_txt += "\n"
+        
+        return llms_txt
+        
+    except Exception as e:
+        print(f"Error generating LLMs.txt with sitemap: {str(e)}")
+        traceback.print_exc()
+        # Return a basic file if there's an error
+        domain = urlparse(url).netloc
+        basic_output = f"""# {domain}
+> This website could not be analyzed properly using sitemap.
 
-def remove_md_extensions(content):
-    """Remove .md extensions from all URLs in markdown content"""
-    # This pattern matches markdown links [text](url.md) and captures the components
+## Main Website
+- [Homepage](https://{domain}): Website homepage
+"""
+        return basic_output
+
+def clean_urls_in_content(content):
+    """
+    Final safety check to remove any .md extensions from URLs in content
+    
+    Args:
+        content (str): Content that might contain markdown links with .md extensions
+        
+    Returns:
+        str: Cleaned content with no .md extensions in URLs
+    """
+    # Pattern to match markdown links with .md extensions
     pattern = r'\[(.*?)\]\((.*?)\.md([^\)]*)\)'
     
     def replace_link(match):
-        text = match.group(1)
+        link_text = match.group(1)
         url = match.group(2)
         extra = match.group(3) if match.group(3) else ""
         
-        # Ensure URL has https:// if it's not already starting with http
+        # Make sure URL has https:// if needed
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
             
-        return f'[{text}]({url}{extra})'
+        return f'[{link_text}]({url}{extra})'
     
-    # Replace all markdown links with cleaned versions
-    cleaned_content = re.sub(pattern, replace_link, content)
-    return cleaned_content
+    # Replace all instances
+    return re.sub(pattern, replace_link, content)
 
 def generate_llms_txt(url):
     """
-    Generate content for LLMs.txt file with comprehensive markdown conversion
+    Generate content for LLMs.txt file
     
     Args:
         url (str): The URL to extract information from
@@ -211,6 +166,20 @@ def generate_llms_txt(url):
     Returns:
         str: Content for LLMs.txt file
     """
+    # First try the new sitemap-based approach
+    try:
+        llms_txt_content = generate_llms_txt_from_sitemap(url)
+        
+        # Apply final safety check
+        llms_txt_content = clean_urls_in_content(llms_txt_content)
+        
+        return llms_txt_content
+    except Exception as e:
+        print(f"Sitemap approach failed: {str(e)}")
+        print("Falling back to traditional method...")
+        traceback.print_exc()
+    
+    # Fall back to the traditional approach if sitemap fails
     try:
         # Normalize the URL
         url = normalize_url(url)
@@ -230,7 +199,7 @@ def generate_llms_txt(url):
 - [Homepage](https://{domain}): Website homepage
 """
             # Apply cleaning to ensure no .md extensions
-            return remove_md_extensions(error_output)
+            return clean_urls_in_content(error_output)
         
         # Parse the HTML
         soup = get_soup(response.text)
@@ -317,7 +286,7 @@ def generate_llms_txt(url):
             llms_txt += f"- [Homepage](https://{domain}): Website homepage\n\n"
         
         # One final check to ensure no .md extensions remain
-        llms_txt = remove_md_extensions(llms_txt)
+        llms_txt = clean_urls_in_content(llms_txt)
         
         return llms_txt
         
@@ -333,262 +302,90 @@ def generate_llms_txt(url):
 - [Homepage](https://{domain}): Website homepage
 """
         # Apply cleaning to ensure no .md extensions
-        return remove_md_extensions(basic_output)
+        return clean_urls_in_content(basic_output)
 
-def html_to_markdown(element, base_url='', level=0):
-    """Convert HTML element to markdown recursively"""
-    if element is None:
-        return ""
+def extract_site_info(url, html_content):
+    """Extract site information for LLMs.txt"""
+    # Normalize the URL
+    url = normalize_url(url)
     
-    # If the element is a string, return it cleaned
-    if isinstance(element, str):
-        return clean_text(element)
+    soup = get_soup(html_content)
     
-    # Skip script, style, and hidden elements
-    tag_name = element.name if hasattr(element, 'name') else None
-    if not tag_name or tag_name in ['script', 'style', 'meta', 'link', 'iframe', 'noscript']:
-        return ""
-    
-    # Check if element is hidden
-    style = element.get('style', '')
-    if 'display:none' in style or 'visibility:hidden' in style:
-        return ""
-    
-    result = ""
-    
-    # Handle heading tags
-    if tag_name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
-        level_num = int(tag_name[1])
-        text = clean_text(element.get_text())
-        if text:
-            result += '#' * level_num + ' ' + text + '\n\n'
-    
-    # Handle paragraph
-    elif tag_name == 'p':
-        text = clean_text(element.get_text())
-        if text:
-            result += text + '\n\n'
-    
-    # Handle links
-    elif tag_name == 'a' and element.get('href'):
-        href = element.get('href')
-        text = clean_text(element.get_text())
-        
-        if text and href and not href.startswith('javascript:'):
-            # Make absolute URL if relative, ensure no .md
-            if not href.startswith(('http://', 'https://')):
-                href = urljoin(base_url, href)
-            
-            # Normalize URL to remove .md if present
-            href = normalize_url(href)
-            
-            result += f"[{text}]({href})"
-        else:
-            # Process children normally if not a valid link
-            for child in element.children:
-                result += html_to_markdown(child, base_url, level)
-    
-    # Handle images
-    elif tag_name == 'img' and element.get('src'):
-        src = element.get('src')
-        alt = element.get('alt', '')
-        
-        # Make absolute URL if relative
-        if not src.startswith(('http://', 'https://')):
-            src = urljoin(base_url, src)
-        
-        result += f"![{alt}]({src})\n\n"
-    
-    # Handle lists
-    elif tag_name == 'ul':
-        for li in element.find_all('li', recursive=False):
-            li_text = clean_text(li.get_text())
-            if li_text:
-                result += '- ' + li_text + '\n'
-        result += '\n'
-    
-    elif tag_name == 'ol':
-        for i, li in enumerate(element.find_all('li', recursive=False)):
-            li_text = clean_text(li.get_text())
-            if li_text:
-                result += f"{i+1}. " + li_text + '\n'
-        result += '\n'
-    
-    # Handle blockquotes
-    elif tag_name == 'blockquote':
-        text = clean_text(element.get_text())
-        if text:
-            lines = text.split('\n')
-            for line in lines:
-                if line.strip():
-                    result += '> ' + line + '\n'
-            result += '\n'
-    
-    # Handle code
-    elif tag_name == 'code':
-        text = clean_text(element.get_text())
-        if text:
-            result += f"`{text}`"
-    
-    # Handle pre (code blocks)
-    elif tag_name == 'pre':
-        text = clean_text(element.get_text())
-        if text:
-            result += f"```\n{text}\n```\n\n"
-    
-    # Handle tables
-    elif tag_name == 'table':
-        rows = element.find_all('tr')
-        if rows:
-            # Extract headers
-            headers = []
-            header_row = None
-            
-            # Look for headers in thead
-            thead = element.find('thead')
-            if thead:
-                header_row = thead.find('tr')
-            
-            # If no thead, use first row as header
-            if not header_row and rows:
-                header_row = rows[0]
-            
-            if header_row:
-                headers = [clean_text(th.get_text()) for th in header_row.find_all(['th', 'td'])]
-                if all(headers):  # Only use if all headers have content
-                    # Add header row
-                    result += '| ' + ' | '.join(headers) + ' |\n'
-                    # Add separator row
-                    result += '| ' + ' | '.join(['---'] * len(headers)) + ' |\n'
-                    
-                    # Add data rows (skip header row if we're using it as a header)
-                    start_idx = 1 if header_row == rows[0] else 0
-                    for row in rows[start_idx:]:
-                        cells = [clean_text(td.get_text()) for td in row.find_all(['td', 'th'])]
-                        if cells:
-                            # Ensure right number of cells
-                            while len(cells) < len(headers):
-                                cells.append('')
-                            cells = cells[:len(headers)]  # Truncate if too many
-                            
-                            result += '| ' + ' | '.join(cells) + ' |\n'
-                    
-                    result += '\n'
-    
-    # Handle divs and other container elements
-    elif tag_name in ['div', 'section', 'article', 'main', 'header', 'footer', 'nav', 'aside']:
-        # Process all children
-        for child in element.children:
-            result += html_to_markdown(child, base_url, level)
-    
-    # For all other elements, just process children
+    # Extract title
+    title = urlparse(url).netloc  # Default to domain name
+    if soup.title:
+        title = normalize_title(soup.title.string)
     else:
-        for child in element.children:
-            result += html_to_markdown(child, base_url, level)
+        h1 = soup.find('h1')
+        if h1:
+            title = normalize_title(h1.get_text())
     
-    return result
-
-def convert_full_html_to_markdown(html_content, base_url):
-    """Convert full HTML content to clean markdown"""
-    try:
-        # Normalize the base URL
-        base_url = normalize_url(base_url)
-        
-        # Parse the HTML
-        soup = get_soup(html_content)
-        
-        # Remove unwanted elements
-        for tag in soup.find_all(['script', 'style', 'iframe', 'noscript']):
-            tag.decompose()
-        
-        # Extract title
-        title = "Website Content"
-        if soup.title:
-            title = normalize_title(soup.title.string)
-        
-        # Start building markdown
-        markdown = f"# {title}\n\n"
-        
-        # Add URL reference
-        markdown += f"Source: {base_url}\n\n"
-        
-        # Convert the entire body to markdown
-        body_markdown = html_to_markdown(soup.body, base_url)
-        
-        # Clean up the markdown
-        # Remove excess whitespace
-        body_markdown = re.sub(r'\n{3,}', '\n\n', body_markdown)
-        # Remove any HTML-like artifacts
-        body_markdown = re.sub(r'<[^>]+>', '', body_markdown)
-        
-        markdown += body_markdown
-        
-        # Ensure no .md extensions in the markdown
-        markdown = remove_md_extensions(markdown)
-        
-        return markdown
+    # Try to extract description
+    description = ""
+    meta_desc = soup.find('meta', attrs={'name': 'description'})
+    if meta_desc and meta_desc.get('content'):
+        description = clean_text(meta_desc.get('content'))
     
-    except Exception as e:
-        print(f"Error converting HTML to markdown: {str(e)}")
-        traceback.print_exc()
-        return f"# Error Processing Content\n\nThere was an error converting content to markdown:\n\n{str(e)}"
-
-def generate_md_files(base_url, urls):
-    """
-    Generate markdown files for each URL with proper conversion from HTML to Markdown
+    # If no description, try other meta tags
+    if not description:
+        og_desc = soup.find('meta', attrs={'property': 'og:description'})
+        if og_desc and og_desc.get('content'):
+            description = clean_text(og_desc.get('content'))
     
-    Args:
-        base_url (str): The base URL of the website
-        urls (list): List of URLs to generate markdown for
-        
-    Returns:
-        dict: Dictionary with URL as key and markdown content as value
-    """
-    md_files = {}
+    # If still no description, try to get the first paragraph
+    if not description:
+        first_p = soup.find('p')
+        if first_p:
+            description = clean_text(first_p.get_text())
     
-    for url in urls:
-        try:
-            print(f"Generating markdown for: {url}")
+    # Find important links
+    important_links = []
+    processed_urls = set()  # Track processed URLs to avoid duplicates
+    
+    # Look for navigation menus first
+    nav_elements = soup.select('nav, .nav, .menu, .navigation, .navbar, header')
+    for nav in nav_elements:
+        for link in nav.find_all('a', href=True):
+            href = link['href']
+            text = clean_text(link.get_text())
             
-            # Normalize the URL
-            url = normalize_url(url)
-            
-            # Send request with appropriate headers
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            }
-            response = requests.get(url, headers=headers, timeout=15, verify=False)
-            
-            if response.status_code == 200:
-                # Create a clean title for the filename
-                path = urlparse(url).path
-                clean_title = path.replace('/', '-').strip('-')
-                if not clean_title:
-                    clean_title = 'index'
+            if text and href and not href.startswith('#') and not href.startswith('javascript:'):
+                # Make absolute URL if relative
+                if not href.startswith(('http://', 'https://')):
+                    href = urljoin(url, href)
                 
-                # Convert HTML to clean markdown
-                md_content = convert_full_html_to_markdown(response.text, url)
+                # Skip if already processed or external
+                parsed_href = urlparse(href)
+                if href in processed_urls or parsed_href.netloc != urlparse(url).netloc:
+                    continue
                 
-                # Add to the dictionary
-                md_files[url] = {
-                    'filename': f"{clean_title}.md",
-                    'content': md_content
-                }
-            else:
-                print(f"Failed to fetch {url}, status code: {response.status_code}")
-                clean_title = urlparse(url).path.replace('/', '-').strip('-') or 'index'
-                md_files[url] = {
-                    'filename': f"error-{clean_title}.md",
-                    'content': f"# Error\n\nFailed to access {url}: Status code {response.status_code}"
-                }
-                
-        except Exception as e:
-            print(f"Error generating markdown for {url}: {str(e)}")
-            traceback.print_exc()
-            clean_title = urlparse(url).path.replace('/', '-').strip('-') or 'index'
-            md_files[url] = {
-                'filename': f"error-{clean_title}.md",
-                'content': f"# Error\n\nFailed to process {url}: {str(e)}"
-            }
+                processed_urls.add(href)
+                important_links.append((text, href))
     
-    return md_files
+    # If not enough nav links, get other prominent links
+    if len(important_links) < 5:
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            text = clean_text(a.get_text())
+            
+            if text and href and not href.startswith('#') and not href.startswith('javascript:'):
+                # Make absolute URL if relative
+                if not href.startswith(('http://', 'https://')):
+                    href = urljoin(url, href)
+                
+                # Skip if already processed or external
+                parsed_href = urlparse(href)
+                if href in processed_urls or parsed_href.netloc != urlparse(url).netloc:
+                    continue
+                
+                processed_urls.add(href)
+                important_links.append((text, href))
+                
+                if len(important_links) >= 10:  # Limit to 10 important links
+                    break
+    
+    return {
+        'title': title,
+        'description': description,
+        'important_links': important_links
+    }
