@@ -18,9 +18,15 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from flask import Flask
+from flask_cors import CORS
+
 app = Flask(__name__)
 CORS(app, 
-     resources={r"/api/*": {"origins": ["https://llmstxt-nextjs.vercel.app"]}},
+     resources={r"/api/*": {"origins": [
+         "https://llmstxt-nextjs.vercel.app",
+         "https://immortal-indol.vercel.app"
+     ]}},
      supports_credentials=True)
 
 # MongoDB connection setup
