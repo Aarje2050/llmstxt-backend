@@ -20,7 +20,10 @@ from email.mime.text import MIMEText
 
 app = Flask(__name__)
 CORS(app, 
-     resources={r"/api/*": {"origins": ["https://llmstxt-nextjs.vercel.app"]}},
+     resources={r"/api/*": {"origins": [
+         "https://llmstxt-nextjs.vercel.app",
+         "https://immortal-indol.vercel.app"
+     ]}},
      supports_credentials=True)
 
 # MongoDB connection setup
