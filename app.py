@@ -23,7 +23,9 @@ CORS(app,
      # Allow access to ALL routes, not just /api/* routes
      resources={r"/*": {"origins": [
          "https://llmstxt-nextjs.vercel.app",
-         "https://immortal-indol.vercel.app"
+         "https://immortal-indol.vercel.app",
+          "https://www.immortalseo.com",
+          "https://immortalseo.com"
      ]}},
      supports_credentials=True)
 
