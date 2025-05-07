@@ -25,7 +25,9 @@ app = Flask(__name__)
 CORS(app, 
      resources={r"/api/*": {"origins": [
          "https://llmstxt-nextjs.vercel.app",
-         "https://immortal-indol.vercel.app"
+         "https://immortal-indol.vercel.app",
+          "https://immortalseo.com",
+          "https://www.immortalseo.com"
      ]}},
      supports_credentials=True)
 
